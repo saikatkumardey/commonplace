@@ -1,0 +1,11 @@
+[package]
+name = "commonplace"
+version = "0.1.0"
+edition = "2021"
+description = "Agent-agnostic long-term memory CLI with BM25 search"
+
+[dependencies]
+
+[profile.release]
+strip = true
+lto = true
