@@ -1,5 +1,8 @@
 # commonplace
 
+[![CI](https://github.com/saikatkumardey/commonplace/actions/workflows/ci.yml/badge.svg)](https://github.com/saikatkumardey/commonplace/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/saikatkumardey/commonplace/branch/master/graph/badge.svg)](https://codecov.io/gh/saikatkumardey/commonplace)
+
 You've spent 20 minutes explaining your preferences to an agent, it fixes the problem, and next week you do it again. Not because the agent is bad. Because it forgot.
 
 ## The Oldest Trick in the Book
