@@ -1,20 +1,20 @@
 # commonplace
 
-Long-term memory for AI agents. Single binary. Hybrid BM25 + semantic search.
+You've spent 20 minutes explaining your preferences to an agent, it fixes the problem, and next week you do it again. Not because the agent is bad. Because it forgot.
 
 ## The Oldest Trick in the Book
 
-In 1706, John Locke published a method he'd used for decades: keep a notebook, organize it by topic headings, and write down anything worth remembering. He called it a "commonplace book." He wasn't the first — Francis Bacon did the same, and so did Isaac Newton, Thomas Jefferson, and Mark Twain. The method predates all of them, going back to Renaissance scholars in the 1500s.
+In 1706, John Locke published a method he'd used for decades: keep a notebook, organize it by topic headings, and write down anything worth remembering. He called it a commonplace book. He wasn't the first. Francis Bacon did the same, and so did Isaac Newton, Thomas Jefferson, and Mark Twain. The method goes back to Renaissance scholars in the 1500s.
 
-The idea is almost embarrassingly simple. You have a notebook. You pick a heading — "observations on light," "useful Latin phrases," "things that went wrong." When you learn something that fits, you write it under that heading. When you need to recall something, you scan the heading. That's it.
+The idea is almost embarrassingly simple. You pick a heading — "observations on light," "useful Latin phrases," "things that went wrong." When you learn something that fits, you write it there. When you need to recall something, you check the heading. That's it.
 
-It worked for 500 years. Locke maintained his for his entire career. Luhmann built a variant (the Zettelkasten) and used it to write 70 books. The technique survived the printing press, the typewriter, the personal computer, and the internet. Every era reinvents it: Zettelkasten, wikis, Evernote, Notion, Obsidian. The format changes. The idea never does.
+It worked for 500 years. Locke maintained his for his entire career. Luhmann built a variant (the Zettelkasten) and used it to write 70 books. Every era reinvents it: Zettelkasten, wikis, Evernote, Notion, Obsidian. The format changes. The idea never does.
 
 ## The Problem It Solves
 
 AI agents have the same problem Renaissance scholars had: they learn things and then forget them.
 
-Every session, an agent discovers your preferences, makes decisions, hits errors, and builds context. Then the session ends and it's all gone. Next session, the agent is a stranger again. It asks the same questions. Makes the same mistakes. Rediscovers the same preferences.
+Every session, an agent discovers your preferences, makes decisions, hits errors, and builds context. Then the session ends and it's gone. Next session, the agent is a stranger again. It asks the same questions. Makes the same mistakes. Rediscovers the same preferences.
 
 ## What This Is
 
@@ -34,11 +34,11 @@ commonplace search "testing approach"
 commonplace read errors
 ```
 
-That's it. Write things down. Search when you need them. The same thing Locke did, except the notebook is `~/.commonplace/` and the headings are markdown files.
+Write things down. Search when you need them. The same thing Locke did, except the notebook is `~/.commonplace/` and the headings are markdown files.
 
 ## How Search Works
 
-Search uses a hybrid of two signals merged via Reciprocal Rank Fusion (RRF):
+Search uses a hybrid of two signals merged via Reciprocal Rank Fusion (RRF).
 
 **BM25** — keyword ranking. Fast, zero latency, works immediately on install. If you write "likes TDD (test-driven development)" it's findable by any of those terms.
 
@@ -46,7 +46,7 @@ Search uses a hybrid of two signals merged via Reciprocal Rank Fusion (RRF):
 
 The hybrid beats either alone. BM25 handles exact terminology; semantic handles meaning. Results are merged and re-ranked before returning.
 
-Semantic search requires a one-time model download (~80MB). If the model isn't cached, search falls back to BM25-only automatically — no errors, just keyword matching.
+Semantic search requires a one-time model download (~80MB). If the model isn't cached, search falls back to BM25-only automatically. No errors, just keyword matching.
 
 ### Supersession Detection
 
@@ -99,7 +99,7 @@ commonplace embed    # backfills existing entries into the semantic index
   embeddings.db       # SQLite: entry vectors for semantic search
 ```
 
-Override location with `COMMONPLACE_HOME` env var. Topic files are plain markdown — open them in any editor, grep them, cat them.
+Override location with `COMMONPLACE_HOME` env var. Topic files are plain markdown. Open them in any editor, grep them, cat them.
 
 ## Agent Integration
 
@@ -137,4 +137,3 @@ The repo includes [`agent-prompt.md`](agent-prompt.md) — drop it into your age
 ## License
 
 MIT
-
