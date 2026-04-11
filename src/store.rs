@@ -196,3 +196,165 @@ pub fn all_entries(home: &Path) -> io::Result<Vec<(String, String)>> {
     }
     Ok(results)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn normalize_topic_lowercases() {
+        assert_eq!(normalize_topic("Preferences"), "preferences");
+    }
+
+    #[test]
+    fn normalize_topic_spaces_become_dashes() {
+        assert_eq!(normalize_topic("my topic"), "my-topic");
+    }
+
+    #[test]
+    fn normalize_topic_trims_dashes() {
+        assert_eq!(normalize_topic("-foo-"), "foo");
+    }
+
+    #[test]
+    fn normalize_topic_special_chars() {
+        assert_eq!(normalize_topic("foo!bar"), "foo-bar");
+    }
+
+    #[test]
+    fn today_is_valid_date() {
+        let date = today();
+        // Must match YYYY-MM-DD
+        assert!(
+            date.len() == 10,
+            "date '{}' is not 10 chars",
+            date
+        );
+        let parts: Vec<&str> = date.split('-').collect();
+        assert_eq!(parts.len(), 3, "expected 3 parts in '{}'", date);
+        let year: u32 = parts[0].parse().expect("year is numeric");
+        let month: u32 = parts[1].parse().expect("month is numeric");
+        let day: u32 = parts[2].parse().expect("day is numeric");
+        assert!(year >= 2025, "year {} should be >= 2025", year);
+        assert!((1..=12).contains(&month), "month {} out of range", month);
+        assert!((1..=31).contains(&day), "day {} out of range", day);
+    }
+
+    #[test]
+    fn write_then_read_roundtrip() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        write_entry(home, "test", "hello world").unwrap();
+        let content = read_topic(home, "test").unwrap();
+        assert!(content.contains("hello world"), "content: {}", content);
+    }
+
+    #[test]
+    fn write_creates_header() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        write_entry(home, "mytopic", "some entry").unwrap();
+        let content = read_topic(home, "mytopic").unwrap();
+        assert!(
+            content.starts_with("# mytopic"),
+            "expected header, got: {}",
+            content
+        );
+    }
+
+    #[test]
+    fn write_multiple_entries() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        write_entry(home, "multi", "entry one").unwrap();
+        write_entry(home, "multi", "entry two").unwrap();
+        write_entry(home, "multi", "entry three").unwrap();
+        let content = read_topic(home, "multi").unwrap();
+        assert!(content.contains("entry one"), "missing entry one");
+        assert!(content.contains("entry two"), "missing entry two");
+        assert!(content.contains("entry three"), "missing entry three");
+    }
+
+    #[test]
+    fn read_nonexistent_topic_errors() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        let result = read_topic(home, "nosuchttopic");
+        assert!(result.is_err(), "expected Err for missing topic");
+    }
+
+    #[test]
+    fn list_topics_empty() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        let topics = list_topics(home).unwrap();
+        assert!(topics.is_empty(), "expected empty list, got {:?}", topics);
+    }
+
+    #[test]
+    fn list_topics_counts() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        write_entry(home, "prefs", "pref one").unwrap();
+        write_entry(home, "prefs", "pref two").unwrap();
+        write_entry(home, "errors", "error one").unwrap();
+        let topics = list_topics(home).unwrap();
+        // sorted alphabetically: errors, prefs
+        assert_eq!(topics.len(), 2);
+        let errors = topics.iter().find(|(n, _)| n == "errors").unwrap();
+        let prefs = topics.iter().find(|(n, _)| n == "prefs").unwrap();
+        assert_eq!(errors.1, 1, "errors count");
+        assert_eq!(prefs.1, 2, "prefs count");
+    }
+
+    #[test]
+    fn forget_removes_matching() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        write_entry(home, "notes", "keep this one").unwrap();
+        write_entry(home, "notes", "remove the apple").unwrap();
+        write_entry(home, "notes", "keep this too").unwrap();
+        forget_entries(home, "notes", "apple").unwrap();
+        let content = read_topic(home, "notes").unwrap();
+        let entry_lines: Vec<&str> = content.lines().filter(|l| l.starts_with("- ")).collect();
+        assert_eq!(entry_lines.len(), 2, "expected 2 remaining entries");
+        assert!(!content.contains("remove the apple"), "apple entry should be gone");
+    }
+
+    #[test]
+    fn forget_case_insensitive() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        write_entry(home, "notes", "This has UPPERCASE text").unwrap();
+        write_entry(home, "notes", "this stays").unwrap();
+        forget_entries(home, "notes", "uppercase").unwrap();
+        let content = read_topic(home, "notes").unwrap();
+        let entry_lines: Vec<&str> = content.lines().filter(|l| l.starts_with("- ")).collect();
+        assert_eq!(entry_lines.len(), 1, "expected 1 remaining entry");
+        assert!(!content.contains("UPPERCASE"), "uppercase entry should be gone");
+    }
+
+    #[test]
+    fn forget_nonexistent_topic_errors() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        let result = forget_entries(home, "ghost", "anything");
+        assert!(result.is_err(), "expected Err for missing topic");
+    }
+
+    #[test]
+    fn all_entries_returns_all() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        write_entry(home, "alpha", "alpha entry one").unwrap();
+        write_entry(home, "beta", "beta entry one").unwrap();
+        write_entry(home, "beta", "beta entry two").unwrap();
+        let entries = all_entries(home).unwrap();
+        assert_eq!(entries.len(), 3, "expected 3 total entries, got {}", entries.len());
+        let alpha_count = entries.iter().filter(|(t, _)| t == "alpha").count();
+        let beta_count = entries.iter().filter(|(t, _)| t == "beta").count();
+        assert_eq!(alpha_count, 1);
+        assert_eq!(beta_count, 2);
+    }
+}

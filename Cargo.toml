@@ -8,6 +8,9 @@ description = "Agent-agnostic long-term memory CLI with BM25 search"
 fastembed = "4"
 rusqlite = { version = "0.31", features = ["bundled"] }
 
+[dev-dependencies]
+tempfile = "3"
+
 [profile.release]
 strip = true
 lto = true

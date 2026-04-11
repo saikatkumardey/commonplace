@@ -260,3 +260,84 @@ fn read_str(data: &[u8], pos: &mut usize) -> io::Result<String> {
     *pos += len;
     Ok(s)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store;
+    use tempfile::tempdir;
+
+    #[test]
+    fn build_and_search_finds_exact_match() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        store::write_entry(home, "notes", "likes TDD test driven development").unwrap();
+        let idx = Index::load_or_build(home).unwrap();
+        let results = idx.search("TDD", 10);
+        assert!(!results.is_empty(), "expected at least one result for TDD");
+        assert!(
+            results[0].text.contains("TDD"),
+            "top result should contain TDD, got: {}",
+            results[0].text
+        );
+    }
+
+    #[test]
+    fn search_empty_index_returns_empty() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        let idx = Index::load_or_build(home).unwrap();
+        let results = idx.search("anything", 10);
+        assert!(results.is_empty(), "expected empty results for empty index");
+    }
+
+    #[test]
+    fn search_respects_limit() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        // Write 5 entries each containing "rust" plus a distinct keyword
+        store::write_entry(home, "notes", "rust alpha programming language").unwrap();
+        store::write_entry(home, "notes", "rust beta programming language").unwrap();
+        store::write_entry(home, "notes", "rust gamma programming language").unwrap();
+        store::write_entry(home, "notes", "rust delta programming language").unwrap();
+        store::write_entry(home, "notes", "rust epsilon programming language").unwrap();
+        let idx = Index::load_or_build(home).unwrap();
+        let results = idx.search("rust programming", 2);
+        assert_eq!(results.len(), 2, "expected exactly 2 results with limit=2");
+    }
+
+    #[test]
+    fn index_save_load_roundtrip() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        store::write_entry(home, "tech", "roundtrip serialization test").unwrap();
+        // First call: builds and auto-saves the .index file
+        let _idx_built = Index::load_or_build(home).unwrap();
+        // Remove from memory and reload from disk
+        let idx_loaded = Index::load(&index_path(home)).unwrap();
+        let results = idx_loaded.search("roundtrip", 10);
+        assert!(!results.is_empty(), "search after load should find entry");
+        assert!(
+            results[0].text.contains("roundtrip"),
+            "loaded result should contain 'roundtrip'"
+        );
+    }
+
+    #[test]
+    fn invalidate_removes_index_file() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        store::write_entry(home, "tech", "some content to index").unwrap();
+        // Build the index (creates .index file)
+        let _idx = Index::load_or_build(home).unwrap();
+        assert!(
+            index_path(home).exists(),
+            ".index file should exist after build"
+        );
+        Index::invalidate(home);
+        assert!(
+            !index_path(home).exists(),
+            ".index file should be gone after invalidate"
+        );
+    }
+}
