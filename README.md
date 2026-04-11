@@ -137,6 +137,28 @@ The repo includes [`agent-prompt.md`](agent-prompt.md) — drop it into your age
 - **Supersession detection** — warns before writing near-duplicate entries
 - **No daemon, no config** — just files and a binary
 
+
+## Benchmark
+
+Evaluated against [MemoryBench](https://huggingface.co/datasets/THUIR/MemoryBench) (arxiv:2510.17281), a benchmark for long-term conversational memory systems.
+
+**Subset:** Locomo (10 conversation pairs, 100 QA examples)
+
+**Method:** For each example, all conversation turns from the retrieved context window are written to a temporary commonplace store. The question is then searched against that store using hybrid BM25+semantic search. A hit is counted if the evidence text (the source utterance the answer is derived from) appears in the top-k results.
+
+| Metric | commonplace | BM25 baseline (paper) |
+|--------|-------------|-----------------------|
+| Recall@1 | 0.20 (20/100) | — |
+| Recall@3 | 0.34 (34/100) | — |
+
+Run on first 100 examples (4 Locomo subsets). The paper reports scores for full LLM-assisted pipelines (mem0, MemoryOS, A-MEM); commonplace is a pure retrieval backend without an LLM re-ranker.
+
+Reproduce:
+```bash
+pip install datasets
+python3 bench_memorybench.py
+```
+
 ## License
 
 MIT
