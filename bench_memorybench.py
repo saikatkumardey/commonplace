@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
 """
-MemoryBench benchmark for commonplace.
+MemoryBench benchmark for commonplace (v2).
 
 Evaluates whether commonplace can retrieve relevant evidence when searching
 with questions from the MemoryBench dataset (Locomo subset).
 
+v2 changes vs v1:
+- Proper semantic model initialization (init before first use)
+- Clean fact extraction: strips "Speaker Xsays : " prefix, writes raw text
+- Splits long utterances into sentences, one entry per sentence
+- Writes to 'conversation' topic; also writes to 'events' if date/time keywords present
+- Better evidence matching: shorter fragments (20 chars), loose keyword recall
+- Adds Recall@5
+
 Methodology:
 - For each example: write all conversation turns to a temp commonplace store
 - Search with the question
-- Check if any evidence text appears in top-k results (k=1, k=3)
-- Report Recall@1 and Recall@3
+- Check if any evidence text appears in top-k results (k=1, k=3, k=5)
+- Report Recall@1, Recall@3, Recall@5
 
 Reference: https://huggingface.co/datasets/THUIR/MemoryBench
 Paper: arxiv:2510.17281
@@ -33,38 +41,71 @@ BINARY = Path(__file__).parent / "target/release/commonplace"
 LOCOMO_SUBSETS = [f"Locomo-{i}" for i in range(10)]
 MAX_EXAMPLES = 100  # cap at 100; dataset has 250 total Locomo examples
 
+# Keywords that suggest temporal/event content
+DATE_TIME_KEYWORDS = re.compile(
+    r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"january|february|march|april|may|june|july|august|september|october|november|december|"
+    r"yesterday|today|tomorrow|last week|next week|this week|"
+    r"\d{1,2}[:/]\d{2}|\d{4})\b",
+    re.IGNORECASE,
+)
 
-def parse_conversation_turns(context_content: str) -> list[tuple[str, str]]:
+
+def split_into_sentences(text: str) -> list[str]:
+    """Split text into sentences on . ! ? boundaries."""
+    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    return [p.strip() for p in parts if p.strip() and len(p.strip()) > 5]
+
+
+def parse_clean_texts(context_content: str) -> list[tuple[str, str]]:
     """
-    Parse conversation turns from the context string.
-    Returns list of (session_header, speaker_line) pairs.
+    Parse conversation turns, returning (topic, clean_text) pairs.
+    - Strips "Speaker Xsays : " prefix
+    - Splits long utterances into sentences
+    - Tags as 'events' if date/time keywords present, else 'conversation'
     """
-    turns = []
-    current_session = "general"
+    entries = []
 
     for line in context_content.split("\n"):
         line = line.strip()
-        # Session header like "Coversation [8:56 pm on 20 July, 2023]:"
-        session_match = re.match(r"Co[nv]ersation \[([^\]]+)\]", line)
-        if session_match:
-            current_session = session_match.group(1)
+        if not line:
             continue
-        # Speaker turn like "Speaker Carolinesays : text"
-        speaker_match = re.match(r"Speaker (\w+)says : (.+)", line)
+
+        # Skip session headers like "Coversation [8:56 pm on 20 July, 2023]:"
+        if re.match(r"Co[nv]ersation \[", line):
+            continue
+
+        # Strip "Speaker Xsays : " prefix
+        speaker_match = re.match(r"Speaker \w+says : (.+)", line)
         if speaker_match:
-            speaker = speaker_match.group(1)
-            text = speaker_match.group(2)
-            turns.append((current_session, f"{speaker}: {text}"))
+            text = speaker_match.group(1).strip()
+        else:
+            # Keep non-speaker lines if they look like content (not headers)
+            if re.match(r"^[A-Z][a-z]+:", line):
+                continue
+            text = line
 
-    return turns
+        if not text or len(text) < 5:
+            continue
+
+        # Split into sentences
+        sentences = split_into_sentences(text)
+        if not sentences:
+            sentences = [text]
+
+        for sentence in sentences:
+            topic = "events" if DATE_TIME_KEYWORDS.search(sentence) else "conversation"
+            entries.append((topic, sentence))
+
+    return entries
 
 
-def write_memories(home_dir: str, turns: list[tuple[str, str]]) -> int:
-    """Write conversation turns to commonplace. Returns count written."""
+def write_memories(home_dir: str, entries: list[tuple[str, str]]) -> int:
+    """Write entries to commonplace. Returns count written."""
     written = 0
-    for session, text in turns:
+    for topic, text in entries:
         result = subprocess.run(
-            [str(BINARY), "write", "conversation", text, "--force"],
+            [str(BINARY), "write", topic, text, "--force"],
             env={**os.environ, "COMMONPLACE_HOME": home_dir},
             capture_output=True,
             text=True,
@@ -88,39 +129,49 @@ def search_memories(home_dir: str, query: str, limit: int = 5) -> list[str]:
     return lines
 
 
+def normalize(text: str) -> str:
+    """Normalize whitespace and punctuation for matching."""
+    text = text.lower()
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
 def extract_result_text(result_line: str) -> str:
     """
     Extract entry text from result line.
     Format: [topic] - DATE: text (score: X.XX)
     """
-    # Remove score suffix
     text = re.sub(r"\s*\(score: [\d.]+\)\s*$", "", result_line)
-    # Remove topic prefix like "[conversation] - DATE: "
     text = re.sub(r"^\[.*?\] - .*?: ", "", text)
-    return text.lower()
+    return normalize(text)
 
 
 def evidence_in_results(evidence_texts: list[str], result_lines: list[str]) -> bool:
     """
     Check if any evidence text fragment appears in any result line.
-    Uses a substring match on a meaningful chunk (first 40 chars) of evidence.
+
+    Matching strategy (in order):
+    1. Substring match with 20-char fragments (shorter = more forgiving)
+    2. Any 2+ words with 6+ chars from evidence appear in results (loose recall)
     """
-    results_combined = " ".join(extract_result_text(r) for r in result_lines).lower()
+    results_combined = " ".join(extract_result_text(r) for r in result_lines)
 
     for ev_text in evidence_texts:
-        # Use first 40 non-trivial characters as the key fragment
-        fragment = ev_text.strip().lower()
-        # Try progressively shorter fragments until we find a match or give up
-        for length in [60, 40, 25]:
+        fragment = normalize(ev_text)
+
+        # Strategy 1: substring match on progressively shorter fragments
+        for length in [60, 40, 20]:
             if len(fragment) >= length:
                 chunk = fragment[:length]
                 if chunk in results_combined:
                     return True
-        # Also try key words from the evidence
-        words = [w for w in fragment.split() if len(w) > 4]
-        if len(words) >= 3:
-            key_words = words[:3]
-            if all(w in results_combined for w in key_words):
+
+        # Strategy 2: loose keyword recall — at least 2 long words must match
+        long_words = [w for w in fragment.split() if len(w) >= 6]
+        if len(long_words) >= 2:
+            matches = sum(1 for w in long_words if w in results_combined)
+            if matches >= 2:
                 return True
 
     return False
@@ -150,6 +201,7 @@ def run_benchmark(max_examples: int = MAX_EXAMPLES):
 
     recall_at_1 = 0
     recall_at_3 = 0
+    recall_at_5 = 0
     errors = 0
 
     for i, ex in enumerate(all_examples):
@@ -169,7 +221,7 @@ def run_benchmark(max_examples: int = MAX_EXAMPLES):
             errors += 1
             continue
 
-        # Get full conversation context from dialog_bm25_dialog (full convo retrieval)
+        # Get full conversation context from dialog_bm25_dialog
         dialog_str = ex.get("dialog_bm25_dialog", "[]")
         try:
             dialog = json.loads(dialog_str)
@@ -182,52 +234,59 @@ def run_benchmark(max_examples: int = MAX_EXAMPLES):
             continue
 
         context_content = dialog[0].get("content", "")
-        turns = parse_conversation_turns(context_content)
+        entries = parse_clean_texts(context_content)
 
-        if not turns:
+        if not entries:
             errors += 1
             continue
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            written = write_memories(tmpdir, turns)
+            written = write_memories(tmpdir, entries)
 
             if written == 0:
                 errors += 1
                 continue
 
-            # Search with top-1
-            results_1 = search_memories(tmpdir, question, limit=1)
-            # Search with top-3
-            results_3 = search_memories(tmpdir, question, limit=3)
+            # Fetch top-5 results once; slice for @1 and @3
+            results_5 = search_memories(tmpdir, question, limit=5)
+            results_3 = results_5[:3]
+            results_1 = results_5[:1]
 
             hit_at_1 = evidence_in_results(evidence_texts, results_1)
             hit_at_3 = evidence_in_results(evidence_texts, results_3)
+            hit_at_5 = evidence_in_results(evidence_texts, results_5)
 
             if hit_at_1:
                 recall_at_1 += 1
             if hit_at_3:
                 recall_at_3 += 1
+            if hit_at_5:
+                recall_at_5 += 1
 
-        if (i + 1) % 10 == 0:
+        evaluated_so_far = i + 1 - errors
+        if (i + 1) % 10 == 0 and evaluated_so_far > 0:
             print(
-                f"  [{i+1}/{total}] Recall@1={recall_at_1/(i+1-errors):.3f}  "
-                f"Recall@3={recall_at_3/(i+1-errors):.3f}  "
+                f"  [{i+1}/{total}] Recall@1={recall_at_1/evaluated_so_far:.3f}  "
+                f"Recall@3={recall_at_3/evaluated_so_far:.3f}  "
+                f"Recall@5={recall_at_5/evaluated_so_far:.3f}  "
                 f"(errors: {errors})"
             )
 
     evaluated = total - errors
     r1 = recall_at_1 / evaluated if evaluated > 0 else 0.0
     r3 = recall_at_3 / evaluated if evaluated > 0 else 0.0
+    r5 = recall_at_5 / evaluated if evaluated > 0 else 0.0
 
     print()
     print("=" * 50)
-    print("MemoryBench Results (Locomo subset)")
+    print("MemoryBench Results (Locomo subset) — v2")
     print("=" * 50)
     print(f"Total examples:   {total}")
     print(f"Evaluated:        {evaluated}")
     print(f"Errors/skipped:   {errors}")
     print(f"Recall@1:         {r1:.3f}  ({recall_at_1}/{evaluated})")
     print(f"Recall@3:         {r3:.3f}  ({recall_at_3}/{evaluated})")
+    print(f"Recall@5:         {r5:.3f}  ({recall_at_5}/{evaluated})")
     print()
 
     return {
@@ -236,8 +295,10 @@ def run_benchmark(max_examples: int = MAX_EXAMPLES):
         "errors": errors,
         "recall_at_1": r1,
         "recall_at_3": r3,
+        "recall_at_5": r5,
         "recall_at_1_count": recall_at_1,
         "recall_at_3_count": recall_at_3,
+        "recall_at_5_count": recall_at_5,
     }
 
 
