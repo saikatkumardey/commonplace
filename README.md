@@ -138,4 +138,3 @@ The repo includes [`agent-prompt.md`](agent-prompt.md) — drop it into your age
 
 MIT
 
-## Built by [Saikat Kumar Dey](https://saikatkumardey.com)
