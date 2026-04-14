@@ -29,12 +29,15 @@ TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
 curl -fsSL "$URL" -o "$TMPDIR/commonplace.tar.gz"
+
+# Find the binary name inside the tarball
+EXTRACTED=$(tar tzf "$TMPDIR/commonplace.tar.gz" | head -1)
 tar xzf "$TMPDIR/commonplace.tar.gz" -C "$TMPDIR"
 
 if [ -w "$INSTALL_DIR" ]; then
-    mv "$TMPDIR/$BINARY" "$INSTALL_DIR/commonplace"
+    mv "$TMPDIR/$EXTRACTED" "$INSTALL_DIR/commonplace"
 else
-    sudo mv "$TMPDIR/$BINARY" "$INSTALL_DIR/commonplace"
+    sudo mv "$TMPDIR/$EXTRACTED" "$INSTALL_DIR/commonplace"
 fi
 
 chmod +x "$INSTALL_DIR/commonplace"
