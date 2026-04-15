@@ -29,15 +29,18 @@ TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
 curl -fsSL "$URL" -o "$TMPDIR/commonplace.tar.gz"
-
-# Find the binary name inside the tarball
-EXTRACTED=$(tar tzf "$TMPDIR/commonplace.tar.gz" | head -1)
 tar xzf "$TMPDIR/commonplace.tar.gz" -C "$TMPDIR"
 
+EXTRACTED=$(find "$TMPDIR" -maxdepth 1 -type f -name "commonplace*" | head -1)
+if [ -z "$EXTRACTED" ]; then
+    echo "Error: could not find commonplace binary in archive" >&2
+    exit 1
+fi
+
 if [ -w "$INSTALL_DIR" ]; then
-    mv "$TMPDIR/$EXTRACTED" "$INSTALL_DIR/commonplace"
+    mv "$EXTRACTED" "$INSTALL_DIR/commonplace"
 else
-    sudo mv "$TMPDIR/$EXTRACTED" "$INSTALL_DIR/commonplace"
+    sudo mv "$EXTRACTED" "$INSTALL_DIR/commonplace"
 fi
 
 chmod +x "$INSTALL_DIR/commonplace"
