@@ -7,6 +7,28 @@ use std::path::{Path, PathBuf};
 pub const REAFFIRM_THRESHOLD: f32 = 0.95;
 pub const SUPERSEDE_THRESHOLD: f32 = 0.85;
 
+/// Half-life (in days) for recency decay applied to search ranking.
+/// At HALF_LIFE_DAYS old, the recency factor is 0.5.
+pub const HALF_LIFE_DAYS: f64 = 365.0;
+
+/// Compute a ranking multiplier for an entry line given today's day count.
+/// Combines recency (exponential decay) and reinforcement (log of [\u{00d7}N]
+/// counter). Lines that fail to parse get a neutral 1.0.
+pub fn boost(line: &str, today_days: i64) -> f64 {
+    let (date, _, count) = match parse_line(line) {
+        Some(t) => t,
+        None => return 1.0,
+    };
+    let entry_days = match store::days_since_epoch(&date) {
+        Some(d) => d,
+        None => return 1.0,
+    };
+    let days_old = (today_days - entry_days).max(0) as f64;
+    let recency = (-days_old / HALF_LIFE_DAYS * std::f64::consts::LN_2).exp();
+    let reinforcement = 1.0 + 0.5 * (count.max(1) as f64).ln();
+    recency * reinforcement
+}
+
 #[derive(Debug)]
 pub enum Outcome {
     Appended,
@@ -200,6 +222,57 @@ mod tests {
     use super::*;
     use crate::store;
     use tempfile::tempdir;
+
+    #[test]
+    fn boost_neutral_for_today_count_one() {
+        let today = store::today_days();
+        let line = format!("- {}: hi", store::today());
+        let b = boost(&line, today);
+        assert!((b - 1.0).abs() < 1e-9, "expected ~1.0, got {}", b);
+    }
+
+    #[test]
+    fn boost_decays_with_age() {
+        let today = store::today_days();
+        let new = format!("- {}: hi", store::today());
+        // 365 days ago
+        let old_date = "2025-04-28";
+        let old_today = store::days_since_epoch("2026-04-28").unwrap();
+        let old = format!("- {}: hi", old_date);
+        let b_new = boost(&new, today);
+        let b_old = boost(&old, old_today);
+        // new entry today vs identical entry from 365 days ago → old ~half
+        assert!(b_old < b_new);
+        assert!((b_old - 0.5).abs() < 1e-6, "expected ~0.5, got {}", b_old);
+    }
+
+    #[test]
+    fn boost_grows_with_count() {
+        let today = store::today_days();
+        let one = format!("- {}: hi", store::today());
+        let three = format!("- {}: hi [\u{00d7}3]", store::today());
+        let ten = format!("- {}: hi [\u{00d7}10]", store::today());
+        let b1 = boost(&one, today);
+        let b3 = boost(&three, today);
+        let b10 = boost(&ten, today);
+        assert!(b3 > b1);
+        assert!(b10 > b3);
+    }
+
+    #[test]
+    fn boost_unparseable_is_neutral() {
+        assert_eq!(boost("not an entry", 0), 1.0);
+        assert_eq!(boost("", 0), 1.0);
+    }
+
+    #[test]
+    fn boost_clips_future_dates_to_zero_age() {
+        // entry "in the future" relative to today: should not exceed
+        // count=1 reinforcement (1.0).
+        let line = "- 2099-01-01: future";
+        let b = boost(line, 0);
+        assert!((b - 1.0).abs() < 1e-9, "got {}", b);
+    }
 
     #[test]
     fn parse_plain_line() {

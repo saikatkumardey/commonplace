@@ -153,6 +153,7 @@ fn cmd_search(home: &std::path::Path, args: &[String]) -> Result<(), String> {
         }
     }
     let query = query_parts.join(" ");
+    let today_days = store::today_days();
 
     // BM25 search always
     let index = bm25::Index::load_or_build(home).map_err(|e| e.to_string())?;
@@ -197,8 +198,14 @@ fn cmd_search(home: &std::path::Path, args: &[String]) -> Result<(), String> {
                             *rrf.entry(key).or_default() += 1.0 / (rank as f64 + 60.0);
                         }
 
-                        // Sort by RRF score
-                        let mut merged: Vec<((String, String), f64)> = rrf.into_iter().collect();
+                        // Apply recency + reinforcement boost, then sort.
+                        let mut merged: Vec<((String, String), f64)> = rrf
+                            .into_iter()
+                            .map(|((topic, text), score)| {
+                                let b = consolidate::boost(&text, today_days);
+                                ((topic, text), score * b)
+                            })
+                            .collect();
                         merged.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
                         merged.truncate(limit);
 
@@ -219,7 +226,15 @@ fn cmd_search(home: &std::path::Path, args: &[String]) -> Result<(), String> {
     }
 
     // BM25 only
-    let results: Vec<_> = bm25_results.into_iter().take(limit).collect();
+    let mut results: Vec<bm25::SearchResult> = bm25_results
+        .into_iter()
+        .map(|mut r| {
+            r.score *= consolidate::boost(&r.text, today_days);
+            r
+        })
+        .collect();
+    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.truncate(limit);
     if results.is_empty() {
         println!("no results");
         return Ok(());

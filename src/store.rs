@@ -67,6 +67,43 @@ fn is_leap(y: i32) -> bool {
     y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)
 }
 
+/// Parse YYYY-MM-DD into days since 1970-01-01. Returns None if invalid.
+pub fn days_since_epoch(date: &str) -> Option<i64> {
+    if date.len() != 10 || date.as_bytes()[4] != b'-' || date.as_bytes()[7] != b'-' {
+        return None;
+    }
+    let y: i32 = date[0..4].parse().ok()?;
+    let m: u32 = date[5..7].parse().ok()?;
+    let d: u32 = date[8..10].parse().ok()?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || y < 1970 {
+        return None;
+    }
+    let mut days: i64 = 0;
+    for yr in 1970..y {
+        days += if is_leap(yr) { 366 } else { 365 };
+    }
+    let leap = is_leap(y);
+    let months: [i64; 12] = [
+        31,
+        if leap { 29 } else { 28 },
+        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ];
+    for i in 0..(m as usize - 1) {
+        days += months[i];
+    }
+    days += (d as i64) - 1;
+    Some(days)
+}
+
+/// Today as days since 1970-01-01.
+pub fn today_days() -> i64 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    secs / 86400
+}
+
 pub fn write_entry(home: &Path, topic: &str, entry: &str) -> io::Result<()> {
     fs::create_dir_all(home)?;
     let path = topic_path(home, topic);
@@ -288,6 +325,29 @@ mod tests {
     #[test]
     fn normalize_topic_special_chars() {
         assert_eq!(normalize_topic("foo!bar"), "foo-bar");
+    }
+
+    #[test]
+    fn days_since_epoch_known_dates() {
+        assert_eq!(days_since_epoch("1970-01-01"), Some(0));
+        assert_eq!(days_since_epoch("1970-01-02"), Some(1));
+        assert_eq!(days_since_epoch("1971-01-01"), Some(365));
+        // 2000 was a leap year (div by 400)
+        assert_eq!(days_since_epoch("2000-03-01"), Some(11017));
+        // Invariant: today() and today_days() agree.
+        let today_str = today();
+        let today_d = today_days();
+        assert_eq!(days_since_epoch(&today_str), Some(today_d));
+    }
+
+    #[test]
+    fn days_since_epoch_rejects_bad_input() {
+        assert_eq!(days_since_epoch(""), None);
+        assert_eq!(days_since_epoch("not-a-date"), None);
+        assert_eq!(days_since_epoch("2026-13-01"), None);
+        assert_eq!(days_since_epoch("2026-01-32"), None);
+        assert_eq!(days_since_epoch("1969-12-31"), None);
+        assert_eq!(days_since_epoch("2026/04/28"), None);
     }
 
     #[test]

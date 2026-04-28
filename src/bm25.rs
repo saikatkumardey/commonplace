@@ -324,6 +324,39 @@ mod tests {
     }
 
     #[test]
+    fn boost_reorders_bm25_results() {
+        use crate::consolidate;
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        // Write a stale entry with old date (predates today by ~2 years).
+        // We bypass write_entry to control the date prefix exactly.
+        let stale_topic = home.join("notes.md");
+        std::fs::write(
+            &stale_topic,
+            "# notes\n\n- 2024-04-28: rust programming language fundamentals\n- 2026-04-28: rust programming language details [\u{00d7}3]\n",
+        )
+        .unwrap();
+        let idx = Index::load_or_build(home).unwrap();
+        let raw = idx.search("rust programming language", 10);
+        // BM25 alone may rank either first depending on TF/IDF; what matters
+        // is that after applying boost, the recent+reinforced entry wins.
+        let today_days = crate::store::today_days();
+        let mut boosted: Vec<_> = raw
+            .into_iter()
+            .map(|mut r| {
+                r.score *= consolidate::boost(&r.text, today_days);
+                r
+            })
+            .collect();
+        boosted.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+        assert!(
+            boosted[0].text.contains("[\u{00d7}3]"),
+            "expected reinforced+recent entry first; got: {:?}",
+            boosted.iter().map(|r| &r.text).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn invalidate_removes_index_file() {
         let dir = tempdir().unwrap();
         let home = dir.path();

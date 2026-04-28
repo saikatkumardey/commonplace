@@ -51,6 +51,15 @@ The hybrid beats either alone. BM25 handles exact terminology; semantic handles 
 
 Semantic search requires a one-time model download (~80MB). If the model isn't cached, search falls back to BM25-only automatically. No errors, just keyword matching.
 
+### Recency and Reinforcement
+
+Two memories with equal relevance shouldn't rank equally if one was confirmed yesterday and the other was written once two years ago. After merging BM25 + semantic scores, every result is multiplied by a boost:
+
+- **Recency** — exponential decay with a 365-day half-life on the entry's last-confirmed date. A two-year-old entry is worth ~25% of a fresh one.
+- **Reinforcement** — `1 + 0.5·ln(N)` where N is the `[×N]` counter from consolidation. An entry confirmed three times is ~1.55x; ten times is ~2.15x.
+
+So a stale single-mention entry can be outranked by a more recent, repeatedly-reaffirmed one even when its raw relevance score is higher. Combined with consolidation, this means the notebook self-curates: things you keep saying float up, things you said once and never repeated drift down.
+
 ### Consolidation
 
 Real notebooks get edited, not just appended to. When you write a new entry, commonplace compares it (semantically) against existing entries in the same topic and acts:
@@ -142,6 +151,7 @@ The repo includes [`agent-prompt.md`](agent-prompt.md) — drop it into your age
 - **Local embeddings** — AllMiniLM-L6-v2 via fastembed, no API key needed
 - **Graceful degradation** — falls back to BM25-only if model not cached
 - **Consolidation, not just append** — near-duplicate entries reaffirm or supersede, with a tombstone audit log
+- **Recency + reinforcement ranking** — search boosts recently-confirmed and repeatedly-reaffirmed entries
 - **No daemon, no config** — just files and a binary
 
 ## License
