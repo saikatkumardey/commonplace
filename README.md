@@ -51,17 +51,23 @@ The hybrid beats either alone. BM25 handles exact terminology; semantic handles 
 
 Semantic search requires a one-time model download (~80MB). If the model isn't cached, search falls back to BM25-only automatically. No errors, just keyword matching.
 
-### Supersession Detection
+### Consolidation
 
-When you write a new entry, commonplace checks it against existing entries in the same topic. If any existing entry has cosine similarity > 0.88, it warns you before appending:
+Real notebooks get edited, not just appended to. When you write a new entry, commonplace compares it (semantically) against existing entries in the same topic and acts:
 
+- **Reaffirm** (cosine ≥ 0.95) — the new entry restates an existing one. The existing line's date is bumped to today and a `[×N]` counter is incremented. No new line is added. Repeated confirmations strengthen a memory instead of cluttering the file.
+- **Supersede** (0.85 ≤ cosine < 0.95) — the new entry refines or replaces an old one. The old line is removed, the new one is written, and the change is logged.
+- **Append** (cosine < 0.85) — the new entry is novel; appended as usual.
+
+Both reaffirm and supersede write an audit record to `.tombstones.md`:
+
+```markdown
+## 2026-04-28 [decisions] supersede
+old: - 2025-09-01: chose pure BM25 search
+new: - 2026-04-28: chose hybrid search over pure BM25 — semantic recall for synonyms
 ```
-Warning: similar entry exists:
-  - 2026-03-01: prefers PostgreSQL for production databases
-Continue anyway? [y/N]
-```
 
-Use `--force` to skip the check in non-interactive contexts.
+So nothing is lost — you can always replay how an entry evolved. Pass `--force` to bypass consolidation and append unconditionally. If the embedding model isn't cached, `write` falls back to plain append.
 
 ## Install
 
@@ -82,7 +88,7 @@ commonplace embed    # backfills existing entries into the semantic index
 
 | Command | What it does |
 |---------|-------------|
-| `commonplace write <topic> <entry> [--force]` | Append entry; warns if similar exists |
+| `commonplace write <topic> <entry> [--force]` | Add entry; consolidates near-duplicates (reaffirm or supersede). `--force` always appends |
 | `commonplace read <topic>` | Print all entries in a topic |
 | `commonplace search <query> [--limit N]` | Hybrid BM25 + semantic search |
 | `commonplace search <query> [--semantic]` | Force semantic path |
@@ -99,6 +105,7 @@ commonplace embed    # backfills existing entries into the semantic index
   decisions.md
   errors.md
   .index              # BM25 index (auto-rebuilt if missing)
+  .tombstones.md      # audit log of reaffirmed/superseded entries
   embeddings.db       # SQLite: entry vectors for semantic search
 ```
 
@@ -134,7 +141,7 @@ The repo includes [`agent-prompt.md`](agent-prompt.md) — drop it into your age
 - **Hybrid search** — BM25 for keywords, semantic for meaning, RRF to merge
 - **Local embeddings** — AllMiniLM-L6-v2 via fastembed, no API key needed
 - **Graceful degradation** — falls back to BM25-only if model not cached
-- **Supersession detection** — warns before writing near-duplicate entries
+- **Consolidation, not just append** — near-duplicate entries reaffirm or supersede, with a tombstone audit log
 - **No daemon, no config** — just files and a binary
 
 ## License

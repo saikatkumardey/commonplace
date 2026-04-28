@@ -1,9 +1,9 @@
 mod bm25;
+mod consolidate;
 mod embeddings;
 mod semantic;
 mod store;
 
-use std::io::{self, BufRead, IsTerminal, Write};
 use std::process;
 
 fn main() {
@@ -88,55 +88,36 @@ fn cmd_write(home: &std::path::Path, args: &[String]) -> Result<(), String> {
         return Err("entry cannot be empty".into());
     }
 
-    // Supersession check: only if model is cached and stdin is a tty
-    let is_interactive = io::stdin().is_terminal() && !force;
-    if is_interactive && semantic::model_is_cached() {
-        if let Ok(emb_store) = embeddings::EmbeddingStore::open(home) {
-            if let Ok(embedder) = semantic::Embedder::new() {
-                if let Ok(new_vec) = embedder.embed_one(&entry) {
-                    if let Ok(existing) = emb_store.by_topic(&topic) {
-                        for (existing_text, existing_vec) in &existing {
-                            let sim = embeddings::cosine(&new_vec, existing_vec);
-                            if sim > 0.88 {
-                                eprint!(
-                                    "Warning: similar entry exists:\n  {}\nContinue anyway? [y/N] ",
-                                    existing_text
-                                );
-                                let _ = io::stderr().flush();
-                                let mut line = String::new();
-                                if io::stdin().lock().read_line(&mut line).is_err() {
-                                    return Ok(());
-                                }
-                                let answer = line.trim().to_lowercase();
-                                if answer != "y" && answer != "yes" {
-                                    println!("Aborted.");
-                                    return Ok(());
-                                }
-                                break;
-                            }
-                        }
+    if force {
+        store::write_entry(home, &topic, &entry).map_err(|e| e.to_string())?;
+        bm25::Index::invalidate(home);
+        if semantic::model_is_cached() {
+            if let Ok(emb_store) = embeddings::EmbeddingStore::open(home) {
+                if let Ok(embedder) = semantic::Embedder::new() {
+                    let line = format!("- {}: {}", store::today(), entry);
+                    if let Ok(v) = embedder.embed_one(&line) {
+                        let _ = emb_store.upsert(&topic, &line, &v);
                     }
                 }
             }
         }
+        return Ok(());
     }
 
-    store::write_entry(home, &topic, &entry).map_err(|e| e.to_string())?;
+    let outcome = consolidate::consolidate(home, &topic, &entry)?;
     bm25::Index::invalidate(home);
-
-    // Try to embed the new entry if model is cached
-    if semantic::model_is_cached() {
-        if let Ok(emb_store) = embeddings::EmbeddingStore::open(home) {
-            if let Ok(embedder) = semantic::Embedder::new() {
-                // Build the full line as stored in the .md file
-                let line = format!("- {}: {}", store::today(), entry);
-                if let Ok(vec) = embedder.embed_one(&line) {
-                    let _ = emb_store.upsert(&topic, &line, &vec);
-                }
-            }
+    match outcome {
+        consolidate::Outcome::Appended => {}
+        consolidate::Outcome::Reaffirmed { old, new, count } => {
+            eprintln!("reaffirmed (\u{00d7}{}): {}", count, new);
+            eprintln!("  was: {}", old);
+        }
+        consolidate::Outcome::Superseded { old, new } => {
+            eprintln!("superseded: {}", new);
+            eprintln!("  was: {}", old);
+            eprintln!("  (logged to .tombstones.md; pass --force to skip consolidation)");
         }
     }
-
     Ok(())
 }
 
@@ -299,7 +280,7 @@ fn usage() {
         "commonplace - agent-agnostic long-term memory with BM25 + semantic search
 
 USAGE:
-    commonplace write <topic> <entry> [--force]   Append a timestamped entry
+    commonplace write <topic> <entry> [--force]   Add an entry; consolidates near-duplicates
     commonplace read <topic>                       Print a topic
     commonplace search <query> [--limit N]         Hybrid BM25+semantic search
                               [--semantic]         Force semantic-only path
@@ -310,6 +291,14 @@ USAGE:
 
 ENVIRONMENT:
     COMMONPLACE_HOME    Data directory (default: ~/.commonplace)
+
+CONSOLIDATION:
+    By default, 'write' compares the new entry against existing entries in the
+    same topic. If similarity is very high (>=0.95) the existing entry is
+    reaffirmed (date bumped, [\u{00d7}N] counter incremented). If similarity is
+    high (>=0.85) the existing entry is superseded by the new one. Replaced
+    entries are logged to .tombstones.md for audit. Pass --force to bypass
+    consolidation and always append.
 
 NOTES:
     Run 'commonplace init' once after install to download the AllMiniLM-L6-v2 model.
