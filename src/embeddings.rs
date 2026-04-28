@@ -41,12 +41,6 @@ impl EmbeddingStore {
         Ok(())
     }
 
-    pub fn delete_topic(&self, topic: &str) -> SqlResult<()> {
-        self.conn
-            .execute("DELETE FROM embeddings WHERE topic = ?1", params![topic])?;
-        Ok(())
-    }
-
     pub fn all(&self) -> SqlResult<Vec<(String, String, Vec<f32>)>> {
         let mut stmt = self
             .conn
@@ -56,22 +50,6 @@ impl EmbeddingStore {
             let text: String = row.get(1)?;
             let blob: Vec<u8> = row.get(2)?;
             Ok((topic, text, bytes_to_f32_vec(&blob)))
-        })?;
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row?);
-        }
-        Ok(result)
-    }
-
-    pub fn by_topic(&self, topic: &str) -> SqlResult<Vec<(String, Vec<f32>)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT text, vec FROM embeddings WHERE topic = ?1")?;
-        let rows = stmt.query_map(params![topic], |row| {
-            let text: String = row.get(0)?;
-            let blob: Vec<u8> = row.get(1)?;
-            Ok((text, bytes_to_f32_vec(&blob)))
         })?;
         let mut result = Vec::new();
         for row in rows {

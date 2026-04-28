@@ -37,6 +37,22 @@ commonplace write preferences "likes TDD"
 commonplace write preferences "likes TDD (test-driven development), always write tests first"
 ```
 
+## Consolidation
+
+`write` is not append-only. The tool compares the new entry against existing
+entries in the same topic and either:
+
+- **Reaffirms** an existing entry if it's nearly identical (bumps date,
+  increments `[×N]` counter). Re-stating known facts strengthens them.
+- **Supersedes** an existing entry if it's a refinement (replaces the old
+  line, logs the change to `.tombstones.md`).
+- **Appends** otherwise.
+
+This means: don't worry about "do I already have this?" — just write what
+you've learned. If it's already known, it gets reaffirmed silently. If it's
+a refinement, the old version is replaced. Pass `--force` only if you want
+to keep both versions (rarely needed).
+
 ## Suggested Topics
 
 | Topic | What goes in it |

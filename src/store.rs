@@ -67,6 +67,43 @@ fn is_leap(y: i32) -> bool {
     y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)
 }
 
+/// Parse YYYY-MM-DD into days since 1970-01-01. Returns None if invalid.
+pub fn days_since_epoch(date: &str) -> Option<i64> {
+    if date.len() != 10 || date.as_bytes()[4] != b'-' || date.as_bytes()[7] != b'-' {
+        return None;
+    }
+    let y: i32 = date[0..4].parse().ok()?;
+    let m: u32 = date[5..7].parse().ok()?;
+    let d: u32 = date[8..10].parse().ok()?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || y < 1970 {
+        return None;
+    }
+    let mut days: i64 = 0;
+    for yr in 1970..y {
+        days += if is_leap(yr) { 366 } else { 365 };
+    }
+    let leap = is_leap(y);
+    let months: [i64; 12] = [
+        31,
+        if leap { 29 } else { 28 },
+        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ];
+    for i in 0..(m as usize - 1) {
+        days += months[i];
+    }
+    days += (d as i64) - 1;
+    Some(days)
+}
+
+/// Today as days since 1970-01-01.
+pub fn today_days() -> i64 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    secs / 86400
+}
+
 pub fn write_entry(home: &Path, topic: &str, entry: &str) -> io::Result<()> {
     fs::create_dir_all(home)?;
     let path = topic_path(home, topic);
@@ -106,6 +143,10 @@ pub fn list_topics(home: &Path) -> io::Result<Vec<(String, usize)>> {
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
+        let fname = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if fname.starts_with('.') {
+            continue;
+        }
         if path.extension().and_then(|e| e.to_str()) == Some("md") {
             let name = path
                 .file_stem()
@@ -166,6 +207,66 @@ pub fn forget_entries(home: &Path, topic: &str, search: &str) -> io::Result<Vec<
     Ok(removed)
 }
 
+/// Replace the first line equal to `old` with `new` in the topic file.
+pub fn replace_line(home: &Path, topic: &str, old: &str, new: &str) -> io::Result<()> {
+    let path = topic_path(home, topic);
+    if !path.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("topic '{}' not found", topic),
+        ));
+    }
+    let content = fs::read_to_string(&path)?;
+    let mut out = Vec::with_capacity(content.lines().count());
+    let mut found = false;
+    for line in content.lines() {
+        if !found && line == old {
+            out.push(new.to_string());
+            found = true;
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    if !found {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "line not found"));
+    }
+    let mut joined = out.join("\n");
+    joined.push('\n');
+    fs::write(&path, joined)?;
+    Ok(())
+}
+
+/// Remove the first line equal to `target` from the topic file.
+pub fn remove_line(home: &Path, topic: &str, target: &str) -> io::Result<()> {
+    let path = topic_path(home, topic);
+    if !path.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("topic '{}' not found", topic),
+        ));
+    }
+    let content = fs::read_to_string(&path)?;
+    let mut out = Vec::with_capacity(content.lines().count());
+    let mut removed = false;
+    for line in content.lines() {
+        if !removed && line == target {
+            removed = true;
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    if !removed {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "line not found"));
+    }
+    while out.last().map_or(false, |l| l.is_empty()) {
+        out.pop();
+    }
+    let mut joined = out.join("\n");
+    joined.push('\n');
+    fs::write(&path, joined)?;
+    Ok(())
+}
+
 /// Read all entries across all topics: (topic, line_text)
 pub fn all_entries(home: &Path) -> io::Result<Vec<(String, String)>> {
     let mut results = Vec::new();
@@ -177,6 +278,10 @@ pub fn all_entries(home: &Path) -> io::Result<Vec<(String, String)>> {
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
+        let fname = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if fname.starts_with('.') {
+            continue;
+        }
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
             continue;
         }
@@ -220,6 +325,29 @@ mod tests {
     #[test]
     fn normalize_topic_special_chars() {
         assert_eq!(normalize_topic("foo!bar"), "foo-bar");
+    }
+
+    #[test]
+    fn days_since_epoch_known_dates() {
+        assert_eq!(days_since_epoch("1970-01-01"), Some(0));
+        assert_eq!(days_since_epoch("1970-01-02"), Some(1));
+        assert_eq!(days_since_epoch("1971-01-01"), Some(365));
+        // 2000 was a leap year (div by 400)
+        assert_eq!(days_since_epoch("2000-03-01"), Some(11017));
+        // Invariant: today() and today_days() agree.
+        let today_str = today();
+        let today_d = today_days();
+        assert_eq!(days_since_epoch(&today_str), Some(today_d));
+    }
+
+    #[test]
+    fn days_since_epoch_rejects_bad_input() {
+        assert_eq!(days_since_epoch(""), None);
+        assert_eq!(days_since_epoch("not-a-date"), None);
+        assert_eq!(days_since_epoch("2026-13-01"), None);
+        assert_eq!(days_since_epoch("2026-01-32"), None);
+        assert_eq!(days_since_epoch("1969-12-31"), None);
+        assert_eq!(days_since_epoch("2026/04/28"), None);
     }
 
     #[test]
@@ -341,6 +469,56 @@ mod tests {
         let home = dir.path();
         let result = forget_entries(home, "ghost", "anything");
         assert!(result.is_err(), "expected Err for missing topic");
+    }
+
+    #[test]
+    fn replace_line_swaps_first_match() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        write_entry(home, "t", "alpha").unwrap();
+        write_entry(home, "t", "beta").unwrap();
+        let content = read_topic(home, "t").unwrap();
+        let old = content.lines().find(|l| l.contains("alpha")).unwrap().to_string();
+        let new = old.replace("alpha", "ALPHA");
+        replace_line(home, "t", &old, &new).unwrap();
+        let after = read_topic(home, "t").unwrap();
+        assert!(after.contains("ALPHA"));
+        assert!(!after.contains("alpha"));
+        assert!(after.contains("beta"), "beta should still be present");
+    }
+
+    #[test]
+    fn replace_line_errors_when_missing() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        write_entry(home, "t", "alpha").unwrap();
+        let result = replace_line(home, "t", "- 2000-01-01: nonexistent", "- 2000-01-01: x");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn remove_line_drops_first_match() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        write_entry(home, "t", "alpha").unwrap();
+        write_entry(home, "t", "beta").unwrap();
+        let content = read_topic(home, "t").unwrap();
+        let target = content.lines().find(|l| l.contains("alpha")).unwrap().to_string();
+        remove_line(home, "t", &target).unwrap();
+        let after = read_topic(home, "t").unwrap();
+        assert!(!after.contains("alpha"));
+        assert!(after.contains("beta"));
+    }
+
+    #[test]
+    fn dotfile_md_not_listed() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        write_entry(home, "real", "entry").unwrap();
+        std::fs::write(home.join(".tombstones.md"), "# tombstones\n").unwrap();
+        let topics = list_topics(home).unwrap();
+        let names: Vec<&str> = topics.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["real"]);
     }
 
     #[test]
